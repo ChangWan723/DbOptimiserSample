@@ -1,0 +1,3 @@
+SELECT *
+FROM Project, Department
+WHERE dept=deptid

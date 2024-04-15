@@ -1,0 +1,3 @@
+Person:400:persid,400:persname,350:age,47
+Project:40:projid,40:projname,35:dept,5
+Department:5:deptid,5:deptname,5:manager,5

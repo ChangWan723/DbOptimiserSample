@@ -1,0 +1,3 @@
+SELECT projname, deptname
+FROM Person, Project, Department
+WHERE persid=manager, dept=deptid, persname="Smith"

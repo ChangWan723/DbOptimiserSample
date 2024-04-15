@@ -1,0 +1,3 @@
+SELECT persname
+FROM Person
+WHERE age="35"

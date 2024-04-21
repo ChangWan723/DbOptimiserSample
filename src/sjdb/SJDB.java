@@ -26,9 +26,9 @@ public class SJDB {
 		
 		// read stdin, parse, and build canonical query plan
 		QueryParser queryParser = new QueryParser(cat, new InputStreamReader(System.in));
-		//Operator plan = queryParser.parse();
+		Operator plan = queryParser.parse();
 
-		Operator plan = query(cat);
+		//Operator plan = query(cat);
 
 		// create estimator visitor and apply it to canonical plan
 		Estimator est = new Estimator();
@@ -72,10 +72,11 @@ public class SJDB {
 
 
 		Select s1 = new Select(p2, new Predicate(new Attribute("persid"), new Attribute("manager")));
-		Select s2 = new Select(s1, new Predicate(new Attribute("dept"), new Attribute("deptid")));
-		Select s3 = new Select(s2, new Predicate(new Attribute("persname"), "Smith"));
+		Select s2 = new Select(s1, new Predicate(new Attribute("persname"), "Smith"));
+		Select s3 = new Select(s2, new Predicate(new Attribute("persid"), new Attribute("deptname")));
+		Select s4 = new Select(s3, new Predicate(new Attribute("dept"), new Attribute("deptid")));
 
-		Project project = new Project(s1, Arrays.asList(new Attribute("projname"), new Attribute("deptname")));
-		return s3;
+		Project project = new Project(s4, Arrays.asList(new Attribute("projname"), new Attribute("deptname")));
+		return project;
 	}
 }

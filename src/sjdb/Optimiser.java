@@ -74,8 +74,8 @@ public class Optimiser {
         if (newInput instanceof Scan) {
             // 如果输入是Scan，直接应用选择
             return new Select(newInput, predicate);
-        } else if (newInput instanceof BinaryOperator) {
-            // 如果新的输入是二元操作符，根据谓词涉及的属性决定是否可以推下
+        } else if (newInput instanceof Product) {
+            // 如果新的输入是Product操作符，根据谓词涉及的属性决定是否可以推下
             if (canBePushedToLeftSubtree(predicate, newInput)) {
                 // 如果谓词涉及的属性全部来自左子树
                 BinaryOperator binOp = (BinaryOperator) newInput;
@@ -86,6 +86,17 @@ public class Optimiser {
                 BinaryOperator binOp = (BinaryOperator) newInput;
                 Operator right = pushdownSelections(new Select(binOp.getRight(), predicate));
                 return new Product(binOp.getLeft(), right);
+            }
+        } else if (newInput instanceof UnaryOperator) {
+            // Skip the UnaryOperator and try to push the selection down its input
+            Operator inputOfUnary = ((UnaryOperator) newInput).getInput();
+            Operator pushed = handleSelection(predicate, inputOfUnary);
+
+            // Reconstruct the UnaryOperator with the pushed selection
+            if (newInput instanceof Project) {
+                return new Project(pushed, ((Project) newInput).getAttributes());
+            } else {
+                return new Select(pushed, ((Select) newInput).getPredicate());
             }
         }
         // 如果无法进一步推下选择，保持当前结构

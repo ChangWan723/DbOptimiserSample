@@ -107,8 +107,12 @@ public class Estimator implements PlanVisitor {
 		Relation rightRelation = op.getRight().getOutput();
 		Predicate predicate = op.getPredicate();
 
-		Attribute leftAttribute = leftRelation.getAttribute(predicate.getLeftAttribute());
-		Attribute rightAttribute = rightRelation.getAttribute(predicate.getRightAttribute());
+		Attribute leftAttribute = leftRelation.getAttributes().contains(predicate.getLeftAttribute()) ?
+				leftRelation.getAttribute(predicate.getLeftAttribute()) :
+				rightRelation.getAttribute(predicate.getLeftAttribute());
+		Attribute rightAttribute = rightRelation.getAttributes().contains(predicate.getRightAttribute()) ?
+				rightRelation.getAttribute(predicate.getRightAttribute()) :
+				leftRelation.getAttribute(predicate.getRightAttribute());
 		int maxDistinctValues = Math.max(leftAttribute.getValueCount(), rightAttribute.getValueCount());
 		int minDistinctValues = Math.min(leftAttribute.getValueCount(), rightAttribute.getValueCount());
 

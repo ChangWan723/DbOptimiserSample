@@ -1,7 +1,9 @@
 package sjdb;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class Optimiser {
     private Catalogue catalogue;
@@ -11,36 +13,51 @@ public class Optimiser {
     }
 
     public Operator optimise(Operator plan) {
+        Estimator est = new Estimator();
+
+        plan.accept(est);
         plan = transformToLeftDeepTree(plan);
+
+        plan.accept(est);
         plan = pushdownSelections(plan);
-        /*plan = optimizeJoinOrder(plan);
-        plan = combineProductsToCreateJoins(plan);
-        plan = pushdownProjections(plan);*/
+
+        plan.accept(est);
+        plan = combineToJoin(plan);
+
+        plan.accept(est);
+        plan = pushdownProjections(plan);
+
         return plan;
     }
 
-    private Operator optimizeJoinOrder(Operator plan) {
-        // 假设输入是一系列的Product操作符
-        if (!(plan instanceof Product)) {
-            return plan;
-        }
 
-        // 实际优化逻辑将更复杂，这里简化为总是将左子树深度最小的操作符与右侧进行连接
-        List<Operator> operands = new ArrayList<>();
-        while (plan instanceof Product) {
-            operands.add(((Product) plan).getRight());
-            plan = ((Product) plan).getLeft();
-        }
-        operands.add(plan);
+    private Operator transformToLeftDeepTree(Operator plan) {
+        if (plan instanceof Product) {
+            BinaryOperator binaryOp = (BinaryOperator) plan;
 
-        // 重新组织操作符，以优化连接顺序
-        Operator result = operands.remove(0);
-        for (Operator operand : operands) {
-            result = new Product(result, operand);
+            // 递归确保左侧和右侧子树都是左深树
+            Operator left = transformToLeftDeepTree(binaryOp.getLeft());
+            Operator right = transformToLeftDeepTree(binaryOp.getRight());
+
+            // 如果右侧是Product操作符，进行重组以形成左深树。
+            if (right instanceof Product) {
+                // 将当前节点的右子节点的左子节点与当前节点的左子节点连接
+                Operator newLeft = new Product(left, ((BinaryOperator) right).getLeft());
+
+                // 继续处理这种新的左深结构
+                return new Product(transformToLeftDeepTree(newLeft), ((BinaryOperator) right).getRight());
+            } else {
+                // 如果右侧不是二元操作符，只需重新连接即可
+                return new Product(left, right);
+            }
+        } else if (plan instanceof Select) {
+            return new Select(transformToLeftDeepTree(((UnaryOperator) plan).getInput()), ((Select) plan).getPredicate());
+        } else if (plan instanceof Project) {
+            return new Project(transformToLeftDeepTree(((UnaryOperator) plan).getInput()), ((Project) plan).getAttributes());
         }
-        return result;
+        // 如果是其他操作符，直接返回
+        return plan;
     }
-
 
     private Operator pushdownSelections(Operator plan) {
         if (plan instanceof Select) {
@@ -104,6 +121,25 @@ public class Optimiser {
     }
 
 
+    private boolean canBePushedToLeftSubtree(Predicate predicate, Operator operator) {
+        if (!(operator instanceof BinaryOperator)) {
+            return false;
+        }
+        BinaryOperator binOp = (BinaryOperator) operator;
+        Operator left = binOp.getLeft();
+        return containsAttribute(left, predicate.getLeftAttribute()) &&
+                (predicate.getRightAttribute() == null || containsAttribute(left, predicate.getRightAttribute()));
+    }
+
+    private boolean canBePushedToRightSubtree(Predicate predicate, Operator operator) {
+        if (!(operator instanceof BinaryOperator)) {
+            return false;
+        }
+        BinaryOperator binOp = (BinaryOperator) operator;
+        return containsAttribute(binOp.getRight(), predicate.getLeftAttribute()) &&
+                (predicate.getRightAttribute() == null || containsAttribute(binOp.getRight(), predicate.getRightAttribute()));
+    }
+
     private boolean containsAttribute(Operator op, Attribute attr) {
         if (op instanceof BinaryOperator) {
             BinaryOperator binOp = (BinaryOperator) op;
@@ -126,129 +162,129 @@ public class Optimiser {
         return false;
     }
 
-    private boolean canBePushedToLeftSubtree(Predicate predicate, Operator operator) {
-        if (!(operator instanceof BinaryOperator)) {
-            return false;
-        }
-        BinaryOperator binOp = (BinaryOperator) operator;
-        Operator left = binOp.getLeft();
-        return containsAttribute(left, predicate.getLeftAttribute()) &&
-                (predicate.getRightAttribute() == null || containsAttribute(left, predicate.getRightAttribute()));
-    }
 
-    private boolean canBePushedToRightSubtree(Predicate predicate, Operator operator) {
-        if (!(operator instanceof BinaryOperator)) {
-            return false;
-        }
-        BinaryOperator binOp = (BinaryOperator) operator;
-        return containsAttribute(binOp.getRight(), predicate.getLeftAttribute()) &&
-                (predicate.getRightAttribute() == null || containsAttribute(binOp.getRight(), predicate.getRightAttribute()));
-    }
+    private Operator combineToJoin(Operator operator) {
+        if (operator instanceof Select) {
+            // Handle the Select operator
+            Predicate predicate = ((Select) operator).getPredicate();
+            Operator childOperator = ((Select) operator).getInput();
 
+            // If the child is a Product, check if we can form a Join
+            if (childOperator instanceof Product) {
+                Operator leftChild = ((Product) childOperator).getLeft();
+                Operator rightChild = ((Product) childOperator).getRight();
 
-    private Operator combineProductsToCreateJoins(Operator plan) {
-        // 查找可以转换成Join的Product和Select组合
-        if (plan instanceof Product) {
-            Product product = (Product) plan;
-            Operator left = combineProductsToCreateJoins(product.getLeft());
-            Operator right = combineProductsToCreateJoins(product.getRight());
-
-            // 查看右侧是否有Select操作符，这可能指示可以进行Join
-            if (right instanceof Select) {
-                Select select = (Select) right;
-                // 检查谓词是否为Equi-Join条件
-                if (select.getPredicate().getRightAttribute() != null && select.getPredicate().getRightValue() == null) {
-                    // 如果是基于属性的等值连接，创建Join操作符
-                    return new Join(left, select.getInput(), select.getPredicate());
+                if (canFormJoin(predicate, leftChild, rightChild)) {
+                    // Form a Join with the Select's predicate as the join condition
+                    return new Join(combineToJoin(leftChild),
+                            combineToJoin(rightChild), predicate);
                 }
             }
-            // 如果不满足转换条件，返回原始的Product操作符
+            // If no join can be formed, apply the logic recursively
+            return new Select(combineToJoin(childOperator), predicate);
+        } else if (operator instanceof Project) {
+            // For unary operators, apply logic to the child
+            Operator child = ((UnaryOperator) operator).getInput();
+            return new Project(combineToJoin(child), ((Project) operator).getAttributes());
+        } else if (operator instanceof Product) {
+            // For binary operators, apply logic to both children
+            Operator left = combineToJoin(((BinaryOperator) operator).getLeft());
+            Operator right = combineToJoin(((BinaryOperator) operator).getRight());
             return new Product(left, right);
-        } else if (plan instanceof UnaryOperator) {
-            // 对单一操作符递归处理其输入
-            Operator input = ((UnaryOperator) plan).getInput();
-            Operator newInput = combineProductsToCreateJoins(input);
-            if (plan instanceof Select) {
-                return new Select(newInput, ((Select) plan).getPredicate());
-            } else if (plan instanceof Project) {
-                return new Project(newInput, ((Project) plan).getAttributes());
-            }
         }
-        // 对于Scan和其他类型的操作符，直接返回
-        return plan;
+        return operator; // If it's a Scan or other type, return it directly
+    }
+
+    private boolean canFormJoin(Predicate predicate, Operator leftChild, Operator rightChild) {
+        // Check if the predicate references attributes from both the left and right operators
+        boolean referencesLeft = referencesAttributes(predicate, leftChild);
+        boolean referencesRight = referencesAttributes(predicate, rightChild);
+        return referencesLeft && referencesRight;
+    }
+
+    private boolean referencesAttributes(Predicate predicate, Operator operator) {
+        // Check if any of the attributes in the predicate are produced by the operator
+        // This logic will depend on the exact structure of the Predicate and Operator classes
+        List<Attribute> attributes = operator.getOutput().getAttributes();
+        return attributes.contains(predicate.getLeftAttribute()) ||
+                (predicate.getRightAttribute() != null && attributes.contains(predicate.getRightAttribute()));
     }
 
     private Operator pushdownProjections(Operator plan) {
-        // 查找需要的属性，如果最顶层是Project操作符，提取所需属性
         if (plan instanceof Project) {
-            List<Attribute> requiredAttributes = new ArrayList<>(((Project) plan).getAttributes());
-            // 移除最顶层的Project，因为我们将尝试将投影尽可能向下推
-            plan = ((Project) plan).getInput();
-            // 递归地推下投影，并创建新的操作符实例，而非修改现有实例
-            return pushdownProjectionsRecursive(plan, requiredAttributes);
+            // 获取当前 Project 节点需要的属性
+            Set<Attribute> requiredAttributes = new HashSet<>(((Project) plan).getAttributes());
+            // 继续处理投影下面的操作符，同时下推这些属性
+            return new Project(pushdownProjectionsRecursive(((Project) plan).getInput(), requiredAttributes), ((Project) plan).getAttributes());
         } else {
-            // 如果最顶层不是Project，直接递归处理
-            return pushdownProjectionsRecursive(plan, null);
+            // 如果顶层不是 Project，我们假定所有属性都是需要的
+            return pushdownProjectionsRecursive(plan, (Set<Attribute>) plan.getOutput().getAttributes());
         }
     }
 
-    private Operator pushdownProjectionsRecursive(Operator plan, List<Attribute> requiredAttributes) {
-        if (plan instanceof Scan) {
-            // 如果是Scan操作符，直接在此处应用投影
-            if (requiredAttributes != null) {
-                return new Project(plan, requiredAttributes);
+    private Operator pushdownProjectionsRecursive(Operator operator, Set<Attribute> attributes) {
+        HashSet<Attribute> requiredAttributes = new HashSet<>(attributes);
+
+        if (operator instanceof BinaryOperator) {
+            // 对于二元操作符，我们需要确定左右子树分别需要哪些属性
+            Set<Attribute> leftAttrs = new HashSet<>();
+            Set<Attribute> rightAttrs = new HashSet<>();
+
+            Operator leftOp = ((BinaryOperator) operator).getLeft();
+            Operator rightOp = ((BinaryOperator) operator).getRight();
+
+            if (operator instanceof Join) {
+                requiredAttributes.add(((Join) operator).getPredicate().getLeftAttribute());
+                requiredAttributes.add(((Join) operator).getPredicate().getRightAttribute());
             }
-            return plan;
-        } else if (plan instanceof UnaryOperator) {
-            // 对于UnaryOperator，递归处理其子节点
-            Operator newInput = pushdownProjectionsRecursive(((UnaryOperator) plan).getInput(), requiredAttributes);
-            // 根据操作符类型重新创建UnaryOperator
-            if (plan instanceof Select) {
-                return new Select(newInput, ((Select) plan).getPredicate());
-            } else if (plan instanceof Project) {
-                // 更新Project操作符的属性
-                return new Project(newInput, requiredAttributes != null ? requiredAttributes : ((Project) plan).getAttributes());
+
+
+            for (Attribute attr : requiredAttributes) {
+                if (operatorContains(leftOp, attr)) {
+                    leftAttrs.add(attr);
+                }
+                if (operatorContains(rightOp, attr)) {
+                    rightAttrs.add(attr);
+                }
             }
-        } else if (plan instanceof BinaryOperator) {
-            // 对于BinaryOperator，递归处理两个子节点
-            Operator newLeft = pushdownProjectionsRecursive(((BinaryOperator) plan).getLeft(), requiredAttributes);
-            Operator newRight = pushdownProjectionsRecursive(((BinaryOperator) plan).getRight(), requiredAttributes);
-            // 根据操作符类型重新创建BinaryOperator
-            if (plan instanceof Product) {
-                return new Product(newLeft, newRight);
-            } else if (plan instanceof Join) {
-                return new Join(newLeft, newRight, ((Join) plan).getPredicate());
-            }
-        }
-        // 对于其他类型的操作符，直接返回
-        return plan;
-    }
 
-    private Operator transformToLeftDeepTree(Operator plan) {
-        if (plan instanceof Product) {
-            BinaryOperator binaryOp = (BinaryOperator) plan;
+            // 递归处理子树
+            Operator left = new Project(pushdownProjectionsRecursive(leftOp, leftAttrs), new ArrayList<>(leftAttrs));
+            Operator right = new Project(pushdownProjectionsRecursive(rightOp, rightAttrs), new ArrayList<>(rightAttrs));
 
-            // 递归确保左侧和右侧子树都是左深树
-            Operator left = transformToLeftDeepTree(binaryOp.getLeft());
-            Operator right = transformToLeftDeepTree(binaryOp.getRight());
-
-            // 如果右侧是Product操作符，进行重组以形成左深树。
-            if (right instanceof Product) {
-                // 将当前节点的右子节点的左子节点与当前节点的左子节点连接
-                Operator newLeft = new Product(left, ((BinaryOperator) right).getLeft());
-
-                // 继续处理这种新的左深结构
-                return new Product(transformToLeftDeepTree(newLeft), ((BinaryOperator) right).getRight());
-            } else {
-                // 如果右侧不是二元操作符，只需重新连接即可
+            // 重构操作符
+            if (operator instanceof Product) {
                 return new Product(left, right);
+            } else if (operator instanceof Join) {
+                return new Join(left, right, ((Join) operator).getPredicate());
             }
-        } else if (plan instanceof Select) {
-            return new Select(transformToLeftDeepTree(((UnaryOperator) plan).getInput()), ((Select) plan).getPredicate());
-        } else if (plan instanceof Project) {
-            return new Project(transformToLeftDeepTree(((UnaryOperator) plan).getInput()), ((Project) plan).getAttributes());
+        } else if (operator instanceof Project) {
+            Operator input = pushdownProjectionsRecursive(((UnaryOperator) operator).getInput(), requiredAttributes);
+            return new Project(input, new ArrayList<>(requiredAttributes));
+        } else if (operator instanceof Select) {
+            Predicate predicate = ((Select) operator).getPredicate();
+            requiredAttributes.add(predicate.getLeftAttribute());
+
+            if (predicate.getRightAttribute() != null) {
+                requiredAttributes.add(predicate.getRightAttribute());
+            }
+            Operator input = pushdownProjectionsRecursive(((UnaryOperator) operator).getInput(), requiredAttributes);
+            return new Select(input, predicate);
         }
-        // 如果是其他操作符，直接返回
-        return plan;
+
+        // 如果没有属性要下推，或者是一个Scan操作符，直接返回
+        return operator;
+    }
+
+    private boolean operatorContains(Operator operator, Attribute attribute) {
+        // 如果 operator 有输出，并且包含给定属性，则返回true
+        if (operator.getOutput() != null) {
+            for (Attribute attr : operator.getOutput().getAttributes()) {
+                if (attr.equals(attribute)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

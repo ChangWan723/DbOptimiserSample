@@ -265,7 +265,7 @@ public class Optimiser {
             if (predicate.getRightAttribute() != null) {
                 requiredAttributes.add(predicate.getRightAttribute());
             }
-            Operator input = new Project(pushDownProjectsRecursive(((UnaryOperator) operator).getInput(), requiredAttributes), new ArrayList<>(requiredAttributes));
+            Operator input = pushDownProjectsRecursive(((UnaryOperator) operator).getInput(), requiredAttributes);
             return new Select(input, predicate);
         }
 

@@ -2,7 +2,6 @@ package sjdb;
 
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
 
 public class Optimiser {
@@ -13,23 +12,12 @@ public class Optimiser {
     }
 
     public Operator optimise(Operator plan) {
-        Estimator est = new Estimator();
-
-        plan.accept(est);
         plan = transformToLeftDeepTree(plan);
-
-        plan.accept(est);
-        plan = pushdownSelections(plan);
-
-        plan.accept(est);
+        plan = pushDownSelections(plan);
         plan = combineToJoin(plan);
-
-        plan.accept(est);
-        plan = pushdownProjections(plan);
-
+        plan = pushDownProjects(plan);
         return plan;
     }
-
 
     private Operator transformToLeftDeepTree(Operator plan) {
         if (plan instanceof Product) {
@@ -59,24 +47,24 @@ public class Optimiser {
         return plan;
     }
 
-    private Operator pushdownSelections(Operator plan) {
+    private Operator pushDownSelections(Operator plan) {
         if (plan instanceof Select) {
             Predicate predicate = ((Select) plan).getPredicate();
             Operator input = ((Select) plan).getInput();
 
             // 尝试将选择操作推到更下层
-            Operator newInput = pushdownSelections(input);
+            Operator newInput = pushDownSelections(input);
 
             // 检查新的输入是否可以进一步推下选择
             return handleSelection(predicate, newInput);
         } else if (plan instanceof Project) {
             // 对于单元操作符，递归处理其子节点
-            Operator newInput = pushdownSelections(((UnaryOperator) plan).getInput());
+            Operator newInput = pushDownSelections(((UnaryOperator) plan).getInput());
             return new Project(newInput, ((Project) plan).getAttributes());
         } else if (plan instanceof BinaryOperator) {
             // 对于二元操作符，独立处理两个子节点
-            Operator newLeft = pushdownSelections(((BinaryOperator) plan).getLeft());
-            Operator newRight = pushdownSelections(((BinaryOperator) plan).getRight());
+            Operator newLeft = pushDownSelections(((BinaryOperator) plan).getLeft());
+            Operator newRight = pushDownSelections(((BinaryOperator) plan).getRight());
             if (plan instanceof Product) {
                 return new Product(newLeft, newRight);
             } else if (plan instanceof Join) {
@@ -96,12 +84,12 @@ public class Optimiser {
             if (canBePushedToLeftSubtree(predicate, newInput)) {
                 // 如果谓词涉及的属性全部来自左子树
                 BinaryOperator binOp = (BinaryOperator) newInput;
-                Operator left = pushdownSelections(new Select(binOp.getLeft(), predicate));
+                Operator left = pushDownSelections(new Select(binOp.getLeft(), predicate));
                 return new Product(left, binOp.getRight());
             } else if (canBePushedToRightSubtree(predicate, newInput)) {
                 // 如果谓词涉及的属性全部来自右子树
                 BinaryOperator binOp = (BinaryOperator) newInput;
-                Operator right = pushdownSelections(new Select(binOp.getRight(), predicate));
+                Operator right = pushDownSelections(new Select(binOp.getRight(), predicate));
                 return new Product(binOp.getLeft(), right);
             }
         } else if (newInput instanceof UnaryOperator) {
@@ -120,13 +108,11 @@ public class Optimiser {
         return new Select(newInput, predicate);
     }
 
-
     private boolean canBePushedToLeftSubtree(Predicate predicate, Operator operator) {
         if (!(operator instanceof BinaryOperator)) {
             return false;
         }
-        BinaryOperator binOp = (BinaryOperator) operator;
-        Operator left = binOp.getLeft();
+        Operator left = ((BinaryOperator) operator).getLeft();
         return containsAttribute(left, predicate.getLeftAttribute()) &&
                 (predicate.getRightAttribute() == null || containsAttribute(left, predicate.getRightAttribute()));
     }
@@ -135,20 +121,18 @@ public class Optimiser {
         if (!(operator instanceof BinaryOperator)) {
             return false;
         }
-        BinaryOperator binOp = (BinaryOperator) operator;
-        return containsAttribute(binOp.getRight(), predicate.getLeftAttribute()) &&
-                (predicate.getRightAttribute() == null || containsAttribute(binOp.getRight(), predicate.getRightAttribute()));
+        Operator right = ((BinaryOperator) operator).getRight();
+        return containsAttribute(right, predicate.getLeftAttribute()) &&
+                (predicate.getRightAttribute() == null || containsAttribute(right, predicate.getRightAttribute()));
     }
 
     private boolean containsAttribute(Operator op, Attribute attr) {
         if (op instanceof BinaryOperator) {
             BinaryOperator binOp = (BinaryOperator) op;
-            // 递归检查左右子树是否包含该属性
             return containsAttribute(binOp.getLeft(), attr) || containsAttribute(binOp.getRight(), attr);
         }
 
         if (op instanceof UnaryOperator) {
-            // 递归检查子操作符
             return containsAttribute(((UnaryOperator) op).getInput(), attr);
         }
 
@@ -162,67 +146,80 @@ public class Optimiser {
         return false;
     }
 
-
     private Operator combineToJoin(Operator operator) {
         if (operator instanceof Select) {
-            // Handle the Select operator
             Predicate predicate = ((Select) operator).getPredicate();
             Operator childOperator = ((Select) operator).getInput();
 
-            // If the child is a Product, check if we can form a Join
+            // 如果孩子是一个Product，检查是否可以形成一个 Join
             if (childOperator instanceof Product) {
                 Operator leftChild = ((Product) childOperator).getLeft();
                 Operator rightChild = ((Product) childOperator).getRight();
 
                 if (canFormJoin(predicate, leftChild, rightChild)) {
-                    // Form a Join with the Select's predicate as the join condition
                     return new Join(combineToJoin(leftChild),
                             combineToJoin(rightChild), predicate);
                 }
             }
-            // If no join can be formed, apply the logic recursively
             return new Select(combineToJoin(childOperator), predicate);
         } else if (operator instanceof Project) {
-            // For unary operators, apply logic to the child
             Operator child = ((UnaryOperator) operator).getInput();
             return new Project(combineToJoin(child), ((Project) operator).getAttributes());
         } else if (operator instanceof Product) {
-            // For binary operators, apply logic to both children
             Operator left = combineToJoin(((BinaryOperator) operator).getLeft());
             Operator right = combineToJoin(((BinaryOperator) operator).getRight());
             return new Product(left, right);
         }
-        return operator; // If it's a Scan or other type, return it directly
+        return operator;
     }
 
     private boolean canFormJoin(Predicate predicate, Operator leftChild, Operator rightChild) {
-        // Check if the predicate references attributes from both the left and right operators
         boolean referencesLeft = referencesAttributes(predicate, leftChild);
         boolean referencesRight = referencesAttributes(predicate, rightChild);
         return referencesLeft && referencesRight;
     }
 
     private boolean referencesAttributes(Predicate predicate, Operator operator) {
-        // Check if any of the attributes in the predicate are produced by the operator
-        // This logic will depend on the exact structure of the Predicate and Operator classes
-        List<Attribute> attributes = operator.getOutput().getAttributes();
-        return attributes.contains(predicate.getLeftAttribute()) ||
-                (predicate.getRightAttribute() != null && attributes.contains(predicate.getRightAttribute()));
+        return containsAttribute(operator, predicate.getLeftAttribute()) ||
+                (predicate.getRightAttribute() != null && containsAttribute(operator, predicate.getRightAttribute()));
     }
 
-    private Operator pushdownProjections(Operator plan) {
+    private Operator pushDownProjects(Operator plan) {
         if (plan instanceof Project) {
             // 获取当前 Project 节点需要的属性
             Set<Attribute> requiredAttributes = new HashSet<>(((Project) plan).getAttributes());
             // 继续处理投影下面的操作符，同时下推这些属性
-            return new Project(pushdownProjectionsRecursive(((Project) plan).getInput(), requiredAttributes), ((Project) plan).getAttributes());
+            return new Project(pushDownProjectsRecursive(((Project) plan).getInput(), requiredAttributes), ((Project) plan).getAttributes());
         } else {
             // 如果顶层不是 Project，我们假定所有属性都是需要的
-            return pushdownProjectionsRecursive(plan, (Set<Attribute>) plan.getOutput().getAttributes());
+            return pushDownProjectsRecursive(plan, new HashSet<>(getAllAttributes(plan)));
         }
     }
 
-    private Operator pushdownProjectionsRecursive(Operator operator, Set<Attribute> attributes) {
+    private Set<Attribute> getAllAttributes(Operator plan) {
+        Set<Attribute> attributes = new HashSet<>();
+
+        if (plan instanceof BinaryOperator) {
+            attributes.addAll(getAllAttributes(((BinaryOperator) plan).getLeft()));
+            attributes.addAll(getAllAttributes(((BinaryOperator) plan).getRight()));
+        }
+
+        if (plan instanceof Project) {
+            attributes.addAll(((Project) plan).getAttributes());
+        }
+
+        if (plan instanceof Select) {
+            attributes.addAll(getAllAttributes(((UnaryOperator) plan).getInput()));
+        }
+
+        if (plan instanceof Scan) {
+            attributes.addAll(plan.getOutput().getAttributes());
+        }
+
+        return attributes;
+    }
+
+    private Operator pushDownProjectsRecursive(Operator operator, Set<Attribute> attributes) {
         HashSet<Attribute> requiredAttributes = new HashSet<>(attributes);
 
         if (operator instanceof BinaryOperator) {
@@ -240,17 +237,17 @@ public class Optimiser {
 
 
             for (Attribute attr : requiredAttributes) {
-                if (operatorContains(leftOp, attr)) {
+                if (containsAttribute(leftOp, attr)) {
                     leftAttrs.add(attr);
                 }
-                if (operatorContains(rightOp, attr)) {
+                if (containsAttribute(rightOp, attr)) {
                     rightAttrs.add(attr);
                 }
             }
 
             // 递归处理子树
-            Operator left = new Project(pushdownProjectionsRecursive(leftOp, leftAttrs), new ArrayList<>(leftAttrs));
-            Operator right = new Project(pushdownProjectionsRecursive(rightOp, rightAttrs), new ArrayList<>(rightAttrs));
+            Operator left = new Project(pushDownProjectsRecursive(leftOp, leftAttrs), new ArrayList<>(leftAttrs));
+            Operator right = new Project(pushDownProjectsRecursive(rightOp, rightAttrs), new ArrayList<>(rightAttrs));
 
             // 重构操作符
             if (operator instanceof Product) {
@@ -259,7 +256,7 @@ public class Optimiser {
                 return new Join(left, right, ((Join) operator).getPredicate());
             }
         } else if (operator instanceof Project) {
-            Operator input = pushdownProjectionsRecursive(((UnaryOperator) operator).getInput(), requiredAttributes);
+            Operator input = pushDownProjectsRecursive(((UnaryOperator) operator).getInput(), requiredAttributes);
             return new Project(input, new ArrayList<>(requiredAttributes));
         } else if (operator instanceof Select) {
             Predicate predicate = ((Select) operator).getPredicate();
@@ -268,23 +265,11 @@ public class Optimiser {
             if (predicate.getRightAttribute() != null) {
                 requiredAttributes.add(predicate.getRightAttribute());
             }
-            Operator input = pushdownProjectionsRecursive(((UnaryOperator) operator).getInput(), requiredAttributes);
+            Operator input = new Project(pushDownProjectsRecursive(((UnaryOperator) operator).getInput(), requiredAttributes), new ArrayList<>(requiredAttributes));
             return new Select(input, predicate);
         }
 
         // 如果没有属性要下推，或者是一个Scan操作符，直接返回
         return operator;
-    }
-
-    private boolean operatorContains(Operator operator, Attribute attribute) {
-        // 如果 operator 有输出，并且包含给定属性，则返回true
-        if (operator.getOutput() != null) {
-            for (Attribute attr : operator.getOutput().getAttributes()) {
-                if (attr.equals(attribute)) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 }

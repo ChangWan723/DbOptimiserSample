@@ -18,10 +18,9 @@ public class Estimator implements PlanVisitor {
 	public void visit(Scan op) {
 		Relation input = op.getRelation();
 		Relation output = new Relation(input.getTupleCount());
-		
-		Iterator<Attribute> iter = input.getAttributes().iterator();
-		while (iter.hasNext()) {
-			output.addAttribute(new Attribute(iter.next()));
+
+		for (Attribute attribute : input.getAttributes()) {
+			output.addAttribute(new Attribute(attribute));
 		}
 		
 		op.setOutput(output);
@@ -40,7 +39,6 @@ public class Estimator implements PlanVisitor {
 
 		op.setOutput(outputRelation);
 	}
-
 
 	public void visit(Select op) {
 		Relation inputRelation = op.getInput().getOutput();
@@ -83,8 +81,6 @@ public class Estimator implements PlanVisitor {
 		op.setOutput(outputRelation);
 	}
 
-
-
 	public void visit(Product op) {
 		Relation leftRelation = op.getLeft().getOutput();
 		Relation rightRelation = op.getRight().getOutput();
@@ -100,7 +96,6 @@ public class Estimator implements PlanVisitor {
 
 		op.setOutput(outputRelation);
 	}
-
 
 	public void visit(Join op) {
 		Relation leftRelation = op.getLeft().getOutput();

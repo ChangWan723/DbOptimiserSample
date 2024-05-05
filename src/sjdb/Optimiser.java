@@ -11,6 +11,7 @@ public class Optimiser {
         this.catalogue = catalogue;
     }
 
+    // using the Heuristics method
     public Operator optimise(Operator plan) {
         plan = transformToLeftDeepTree(plan);
         plan = pushdownSelections(plan);

@@ -6,128 +6,124 @@ import java.util.Iterator;
 public class Estimator implements PlanVisitor {
 
 
-	public Estimator() {
-		// empty constructor
-	}
+    public Estimator() {
+        // empty constructor
+    }
 
-	/* 
-	 * Create output relation on Scan operator
-	 *
-	 * Example implementation of visit method for Scan operators.
-	 */
-	public void visit(Scan op) {
-		Relation input = op.getRelation();
-		Relation output = new Relation(input.getTupleCount());
+    /*
+     * Create output relation on Scan operator
+     *
+     * Example implementation of visit method for Scan operators.
+     */
+    public void visit(Scan op) {
+        Relation inputRelation = op.getRelation();
+        Relation outputRelation = new Relation(inputRelation.getTupleCount());
 
-		for (Attribute attribute : input.getAttributes()) {
-			output.addAttribute(new Attribute(attribute));
-		}
-		
-		op.setOutput(output);
-	}
+        inputRelation.getAttributes().forEach(attribute -> outputRelation.addAttribute(new Attribute(attribute)));
 
-	public void visit(Project op) {
-		Relation inputRelation = op.getInput().getOutput();
-		Relation outputRelation = new Relation(inputRelation.getTupleCount());
-		List<Attribute> projectAttributes = op.getAttributes();
+        op.setOutput(outputRelation);
+    }
 
-		for (Attribute attr : projectAttributes) {
-			if (inputRelation.getAttributes().contains(attr)) {
-				outputRelation.addAttribute(new Attribute(attr.getName(), inputRelation.getAttribute(attr).getValueCount()));
-			}
-		}
+    public void visit(Project op) {
+        Relation inputRelation = op.getInput().getOutput();
+        Relation outputRelation = new Relation(inputRelation.getTupleCount());
 
-		op.setOutput(outputRelation);
-	}
+        op.getAttributes().stream()
+                .filter(attr -> inputRelation.getAttributes().contains(attr))
+                .forEach(attr -> outputRelation.addAttribute(new Attribute(attr.getName(), inputRelation.getAttribute(attr).getValueCount())));
 
-	public void visit(Select op) {
-		Relation inputRelation = op.getInput().getOutput();
-		Predicate predicate = op.getPredicate();
-		int estimatedTuples;
-		Relation outputRelation;
+        op.setOutput(outputRelation);
+    }
 
-		if (predicate.equalsValue()) {
-			String attrName = predicate.getLeftAttribute().getName();
-			Attribute inputAttribute = inputRelation.getAttribute(new Attribute(attrName));
+    public void visit(Select op) {
+        Relation inputRelation = op.getInput().getOutput();
+        Predicate predicate = op.getPredicate();
+        Relation outputRelation;
 
-			estimatedTuples = inputRelation.getTupleCount() / inputAttribute.getValueCount();
-			outputRelation = new Relation(estimatedTuples);
+        if (predicate.equalsValue()) {
+            String predicateAttrName = predicate.getLeftAttribute().getName();
+            Attribute inputAttribute = inputRelation.getAttribute(new Attribute(predicateAttrName));
 
-			for (Attribute attr : inputRelation.getAttributes()) {
-				if (attr.getName().equals(attrName)) {
-					outputRelation.addAttribute(new Attribute(attr.getName(), 1));
-				} else {
-					outputRelation.addAttribute(new Attribute(attr.getName(), attr.getValueCount()));
-				}
-			}
-		} else {
-			Attribute leftAttr = inputRelation.getAttribute(predicate.getLeftAttribute());
-			Attribute rightAttr = inputRelation.getAttribute(predicate.getRightAttribute());
-			int maxDistinctValues = Math.max(leftAttr.getValueCount(), rightAttr.getValueCount());
-			int minDistinctValues = Math.min(leftAttr.getValueCount(), rightAttr.getValueCount());
+            int estimatedTuples = inputRelation.getTupleCount() / inputAttribute.getValueCount();
+            outputRelation = new Relation(estimatedTuples);
 
-			estimatedTuples = inputRelation.getTupleCount() / maxDistinctValues;
-			outputRelation = new Relation(estimatedTuples);
+            inputRelation.getAttributes()
+                    .forEach(attr -> {
+                        int valueCount = isSameAttr(predicateAttrName, attr) ? 1 : attr.getValueCount();
+                        outputRelation.addAttribute(new Attribute(attr.getName(), valueCount));
+                    });
+        } else {
+            Attribute leftAttr = inputRelation.getAttribute(predicate.getLeftAttribute());
+            Attribute rightAttr = inputRelation.getAttribute(predicate.getRightAttribute());
 
-			for (Attribute attr : inputRelation.getAttributes()) {
-				if (attr.getName().equals(leftAttr.getName()) || attr.getName().equals(rightAttr.getName())) {
-					outputRelation.addAttribute(new Attribute(attr.getName(), minDistinctValues));
-				} else {
-					outputRelation.addAttribute(new Attribute(attr.getName(), attr.getValueCount()));
-				}
-			}
-		}
+            int maxAttrValues = Math.max(leftAttr.getValueCount(), rightAttr.getValueCount());
+            int estimatedTuples = inputRelation.getTupleCount() / maxAttrValues;
+            outputRelation = new Relation(estimatedTuples);
 
-		op.setOutput(outputRelation);
-	}
+            int minAttrValues = Math.min(leftAttr.getValueCount(), rightAttr.getValueCount());
+            inputRelation.getAttributes()
+                    .forEach(attr -> {
+                        int valueCount = isSameAttr(leftAttr.getName(), attr) || isSameAttr(rightAttr.getName(), attr)
+                                ? minAttrValues : attr.getValueCount();
+                        outputRelation.addAttribute(new Attribute(attr.getName(), valueCount));
+                    });
+        }
 
-	public void visit(Product op) {
-		Relation leftRelation = op.getLeft().getOutput();
-		Relation rightRelation = op.getRight().getOutput();
-		int outputTupleCount = leftRelation.getTupleCount() * rightRelation.getTupleCount();
+        op.setOutput(outputRelation);
+    }
 
-		Relation outputRelation = new Relation(outputTupleCount);
-		for (Attribute attr : leftRelation.getAttributes()) {
-			outputRelation.addAttribute(new Attribute(attr.getName(), attr.getValueCount()));
-		}
-		for (Attribute attr : rightRelation.getAttributes()) {
-			outputRelation.addAttribute(new Attribute(attr.getName(), attr.getValueCount()));
-		}
+    private static boolean isSameAttr(String attrName, Attribute attr) {
+        return attr.getName().equals(attrName);
+    }
 
-		op.setOutput(outputRelation);
-	}
+    public void visit(Product op) {
+        Relation leftRelation = op.getLeft().getOutput();
+        Relation rightRelation = op.getRight().getOutput();
 
-	public void visit(Join op) {
-		Relation leftRelation = op.getLeft().getOutput();
-		Relation rightRelation = op.getRight().getOutput();
-		Predicate predicate = op.getPredicate();
+        int estimatedTuples = leftRelation.getTupleCount() * rightRelation.getTupleCount();
+        Relation outputRelation = new Relation(estimatedTuples);
 
-		Attribute leftAttribute = leftRelation.getAttributes().contains(predicate.getLeftAttribute()) ?
-				leftRelation.getAttribute(predicate.getLeftAttribute()) :
-				rightRelation.getAttribute(predicate.getLeftAttribute());
-		Attribute rightAttribute = rightRelation.getAttributes().contains(predicate.getRightAttribute()) ?
-				rightRelation.getAttribute(predicate.getRightAttribute()) :
-				leftRelation.getAttribute(predicate.getRightAttribute());
-		int maxDistinctValues = Math.max(leftAttribute.getValueCount(), rightAttribute.getValueCount());
-		int minDistinctValues = Math.min(leftAttribute.getValueCount(), rightAttribute.getValueCount());
+        leftRelation.getAttributes()
+                .forEach(attr -> outputRelation.addAttribute(new Attribute(attr.getName(), attr.getValueCount())));
+        rightRelation.getAttributes()
+                .forEach(attr -> outputRelation.addAttribute(new Attribute(attr.getName(), attr.getValueCount())));
 
-		int estimatedTuples = (leftRelation.getTupleCount() * rightRelation.getTupleCount()) / maxDistinctValues;
+        op.setOutput(outputRelation);
+    }
 
-		Relation outputRelation = new Relation(estimatedTuples);
-		for (Attribute attr : leftRelation.getAttributes()) {
-			if (attr.getName().equals(leftAttribute.getName())) {
-				outputRelation.addAttribute(new Attribute(attr.getName(), minDistinctValues));
-			} else {
-				outputRelation.addAttribute(new Attribute(attr.getName(), attr.getValueCount()));
-			}
-		}
-		for (Attribute attr : rightRelation.getAttributes()) {
-			if (attr.getName().equals(rightAttribute.getName())) {
-				continue;
-			}
-			outputRelation.addAttribute(new Attribute(attr.getName(), attr.getValueCount()));
-		}
+    public void visit(Join op) {
+        Relation leftRelation = op.getLeft().getOutput();
+        Relation rightRelation = op.getRight().getOutput();
+        Predicate predicate = op.getPredicate();
 
-		op.setOutput(outputRelation);
-	}
+        Attribute leftAttribute;
+        Attribute rightAttribute;
+        // for the Join predicate, the leftAttribute is not always in the leftRelation  (it could be rightRelation),
+        // so, the judgement is required
+        if (leftRelation.getAttributes().contains(predicate.getLeftAttribute())) {
+            leftAttribute = leftRelation.getAttribute(predicate.getLeftAttribute());
+            rightAttribute = rightRelation.getAttribute(predicate.getRightAttribute());
+        } else {
+            leftAttribute = rightRelation.getAttribute(predicate.getLeftAttribute());
+            rightAttribute = leftRelation.getAttribute(predicate.getRightAttribute());
+        }
+
+        int maxAttrValues = Math.max(leftAttribute.getValueCount(), rightAttribute.getValueCount());
+        int estimatedTuples = (leftRelation.getTupleCount() * rightRelation.getTupleCount()) / maxAttrValues;
+        Relation outputRelation = new Relation(estimatedTuples);
+
+        int minAttrValues = Math.min(leftAttribute.getValueCount(), rightAttribute.getValueCount());
+        leftRelation.getAttributes().forEach(attr -> {
+            int valueCount = isSameAttr(leftAttribute.getName(), attr) || isSameAttr(rightAttribute.getName(), attr)
+                    ? minAttrValues : attr.getValueCount();
+            outputRelation.addAttribute(new Attribute(attr.getName(), valueCount));
+        });
+        rightRelation.getAttributes().forEach(attr -> {
+            int valueCount = isSameAttr(leftAttribute.getName(), attr) || isSameAttr(rightAttribute.getName(), attr)
+                    ? minAttrValues : attr.getValueCount();
+            outputRelation.addAttribute(new Attribute(attr.getName(), valueCount));
+        });
+
+        op.setOutput(outputRelation);
+    }
 }

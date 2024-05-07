@@ -179,7 +179,7 @@ public class Optimiser {
             return new Project(pushdownProjectsRecursive(((Project) plan).getInput(), requiredAttributes), ((Project) plan).getAttributes());
         } else {
             // If the top-level node is not Project, it means that all attributes are required
-            return pushdownProjectsRecursive(plan, new HashSet<>(getAllAttributes(plan)));
+            return pushdownProjectsRecursive(plan, new HashSet<>(getAllProjectAttributes(plan)));
         }
     }
 
@@ -191,26 +191,27 @@ public class Optimiser {
             Operator leftOp = ((BinaryOperator) operator).getLeft();
             Operator rightOp = ((BinaryOperator) operator).getRight();
 
+            // For Join operator, we need to add the attributes of predicate to the requiredAttributes
             if (operator instanceof Join) {
                 requiredAttributes.add(((Join) operator).getPredicate().getLeftAttribute());
                 requiredAttributes.add(((Join) operator).getPredicate().getRightAttribute());
             }
 
-            // For the BinaryOperator, we need to determine which attributes are needed for the left and right subtrees respectively
-            Set<Attribute> leftAttrs = new HashSet<>();
-            Set<Attribute> rightAttrs = new HashSet<>();
+            // For the BinaryOperator, we need to split the requiredAttributes into left and right subtrees
+            Set<Attribute> leftRequiredAttrs = new HashSet<>();
+            Set<Attribute> rightRequiredAttrs = new HashSet<>();
             for (Attribute attr : requiredAttributes) {
                 if (containsAttribute(leftOp, attr)) {
-                    leftAttrs.add(attr);
+                    leftRequiredAttrs.add(attr);
                 }
                 if (containsAttribute(rightOp, attr)) {
-                    rightAttrs.add(attr);
+                    rightRequiredAttrs.add(attr);
                 }
             }
 
-            // Recursively processing subtrees
-            Operator left = new Project(pushdownProjectsRecursive(leftOp, leftAttrs), new ArrayList<>(leftAttrs));
-            Operator right = new Project(pushdownProjectsRecursive(rightOp, rightAttrs), new ArrayList<>(rightAttrs));
+            // Create new Project() for the left and right subtrees respectively, and continue the recursion
+            Operator left = new Project(pushdownProjectsRecursive(leftOp, leftRequiredAttrs), new ArrayList<>(leftRequiredAttrs));
+            Operator right = new Project(pushdownProjectsRecursive(rightOp, rightRequiredAttrs), new ArrayList<>(rightRequiredAttrs));
 
             if (operator instanceof Product) {
                 return new Product(left, right);
@@ -224,6 +225,7 @@ public class Optimiser {
             Predicate predicate = ((Select) operator).getPredicate();
             requiredAttributes.add(predicate.getLeftAttribute());
 
+            // For Select operator, we need to add the attributes of predicate to the requiredAttributes
             if (predicate.getRightAttribute() != null) {
                 requiredAttributes.add(predicate.getRightAttribute());
             }
@@ -235,20 +237,22 @@ public class Optimiser {
         return operator;
     }
 
-    private Set<Attribute> getAllAttributes(Operator plan) {
+    // Recursively get all attributes that need to be projected
+    private Set<Attribute> getAllProjectAttributes(Operator plan) {
         Set<Attribute> attributes = new HashSet<>();
 
         if (plan instanceof BinaryOperator) {
-            attributes.addAll(getAllAttributes(((BinaryOperator) plan).getLeft()));
-            attributes.addAll(getAllAttributes(((BinaryOperator) plan).getRight()));
+            attributes.addAll(getAllProjectAttributes(((BinaryOperator) plan).getLeft()));
+            attributes.addAll(getAllProjectAttributes(((BinaryOperator) plan).getRight()));
         }
 
+        // For Project operator, there is no need for recursion, just add getAttributes()
         if (plan instanceof Project) {
             attributes.addAll(((Project) plan).getAttributes());
         }
 
         if (plan instanceof Select) {
-            attributes.addAll(getAllAttributes(((UnaryOperator) plan).getInput()));
+            attributes.addAll(getAllProjectAttributes(((UnaryOperator) plan).getInput()));
         }
 
         if (plan instanceof Scan) {

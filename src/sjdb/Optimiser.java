@@ -12,6 +12,7 @@ public class Optimiser {
     }
 
     // using the Heuristics method
+    // comments were added at crucial points in the code to help understanding
     public Operator optimise(Operator plan) {
         plan = transformToLeftDeepTree(plan);
         plan = pushdownSelections(plan);
@@ -112,18 +113,19 @@ public class Optimiser {
                 (predicate.getRightAttribute() == null || containsAttribute(right, predicate.getRightAttribute()));
     }
 
-    private boolean containsAttribute(Operator op, Attribute attr) {
-        if (op instanceof BinaryOperator) {
-            BinaryOperator binOp = (BinaryOperator) op;
+    // Recursively determine if the operator contains the attr
+    private boolean containsAttribute(Operator operator, Attribute attr) {
+        if (operator instanceof BinaryOperator) {
+            BinaryOperator binOp = (BinaryOperator) operator;
             return containsAttribute(binOp.getLeft(), attr) || containsAttribute(binOp.getRight(), attr);
         }
 
-        if (op instanceof UnaryOperator) {
-            return containsAttribute(((UnaryOperator) op).getInput(), attr);
+        if (operator instanceof UnaryOperator) {
+            return containsAttribute(((UnaryOperator) operator).getInput(), attr);
         }
 
-        if (op.getOutput() != null) {
-            for (Attribute outputAttr : op.getOutput().getAttributes()) {
+        if (operator.getOutput() != null) {
+            for (Attribute outputAttr : operator.getOutput().getAttributes()) {
                 if (outputAttr.equals(attr)) {
                     return true;
                 }
@@ -161,12 +163,13 @@ public class Optimiser {
     }
 
     private boolean canFormJoin(Predicate predicate, Operator leftChild, Operator rightChild) {
-        boolean referencesLeft = referencesAttributes(predicate, leftChild);
-        boolean referencesRight = referencesAttributes(predicate, rightChild);
-        return referencesLeft && referencesRight;
+        boolean isReferencesLeft = isReferencesAttributes(predicate, leftChild);
+        boolean isReferencesRight = isReferencesAttributes(predicate, rightChild);
+        return isReferencesLeft && isReferencesRight;
     }
 
-    private boolean referencesAttributes(Predicate predicate, Operator operator) {
+    // Determine if attributes in predicate are referenced (contained) in operator
+    private boolean isReferencesAttributes(Predicate predicate, Operator operator) {
         return containsAttribute(operator, predicate.getLeftAttribute()) ||
                 (predicate.getRightAttribute() != null && containsAttribute(operator, predicate.getRightAttribute()));
     }
@@ -184,7 +187,8 @@ public class Optimiser {
     }
 
     private Operator pushdownProjectsRecursive(Operator operator, Set<Attribute> attributes) {
-        // Set<Attribute> attributes is a reference type. A new Set object needs to be created in order not to affect the original attributes object.
+        // Set<Attribute> attributes is a reference type.
+        // So, a new Set object needs to be created in order not to affect the original attributes object.
         Set<Attribute> requiredAttributes = new HashSet<>(attributes);
 
         if (operator instanceof BinaryOperator) {
@@ -200,14 +204,14 @@ public class Optimiser {
             // For the BinaryOperator, we need to split the requiredAttributes into left and right subtrees
             Set<Attribute> leftRequiredAttrs = new HashSet<>();
             Set<Attribute> rightRequiredAttrs = new HashSet<>();
-            for (Attribute attr : requiredAttributes) {
+            requiredAttributes.forEach(attr -> {
                 if (containsAttribute(leftOp, attr)) {
                     leftRequiredAttrs.add(attr);
                 }
                 if (containsAttribute(rightOp, attr)) {
                     rightRequiredAttrs.add(attr);
                 }
-            }
+            });
 
             // Create new Project() for the left and right subtrees respectively, and continue the recursion
             Operator left = new Project(pushdownProjectsRecursive(leftOp, leftRequiredAttrs), new ArrayList<>(leftRequiredAttrs));
@@ -237,7 +241,8 @@ public class Optimiser {
         return operator;
     }
 
-    // Recursively get all attributes that need to be projected
+    // We can't guarantee that getOutput() is not null except for Scan
+    // So we need to recursively get all attributes that need to be projected
     private Set<Attribute> getAllProjectAttributes(Operator plan) {
         Set<Attribute> attributes = new HashSet<>();
 

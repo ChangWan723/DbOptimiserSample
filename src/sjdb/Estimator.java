@@ -72,10 +72,6 @@ public class Estimator implements PlanVisitor {
         op.setOutput(outputRelation);
     }
 
-    private static boolean isSameAttr(String attrName, Attribute attr) {
-        return attr.getName().equals(attrName);
-    }
-
     public void visit(Product op) {
         Relation leftRelation = op.getLeft().getOutput();
         Relation rightRelation = op.getRight().getOutput();
@@ -125,5 +121,9 @@ public class Estimator implements PlanVisitor {
         });
 
         op.setOutput(outputRelation);
+    }
+
+    private static boolean isSameAttr(String attrName, Attribute attr) {
+        return attr.getName().equals(attrName);
     }
 }
